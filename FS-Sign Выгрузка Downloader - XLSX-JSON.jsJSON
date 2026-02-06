@@ -1,0 +1,282 @@
+// ==UserScript==
+// @name         FS-Sign Выгрузка Downloader - XLSX/JSON
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Выгрузка данных с FSign в XLSX и JSON форматах
+// @author       You
+// @match        https://sign.fsdocs.kz/contracts*
+// @grant        GM_addStyle
+// @require      https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Стили для UI
+    GM_addStyle(`
+        .fsign-downloader {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid rgba(0, 123, 255, 0.5);
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            font-family: Arial, sans-serif;
+            min-width: 200px;
+            backdrop-filter: blur(5px);
+        }
+        .fsign-downloader h3 {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: #333;
+            border-bottom: 1px solid #007bff;
+            padding-bottom: 5px;
+        }
+        .fsign-btn {
+            width: 100%;
+            padding: 6px;
+            margin: 3px 0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        .fsign-btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        .fsign-btn-primary:hover {
+            background: #0056b3;
+        }
+        .fsign-btn-success {
+            background: #28a745;
+            color: white;
+        }
+        .fsign-btn-success:hover {
+            background: #218838;
+        }
+        .fsign-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .fsign-status {
+            margin-top: 6px;
+            padding: 5px;
+            background: rgba(248, 249, 250, 0.8);
+            border-radius: 4px;
+            font-size: 10px;
+            color: #666;
+            text-align: center;
+        }
+        .fsign-progress {
+            margin-top: 6px;
+            height: 16px;
+            background: rgba(233, 236, 239, 0.8);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .fsign-progress-bar {
+            height: 100%;
+            background: #007bff;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+        }
+    `);
+
+    // Создание UI
+    const ui = document.createElement('div');
+    ui.className = 'fsign-downloader';
+    ui.innerHTML = `
+        <h3>📥 FSign Выгрузка</h3>
+        <button class="fsign-btn fsign-btn-primary" id="fsign-collect">Собрать данные</button>
+        <button class="fsign-btn fsign-btn-success" id="fsign-xlsx" disabled>Скачать XLSX</button>
+        <button class="fsign-btn fsign-btn-success" id="fsign-json" disabled>Скачать JSON</button>
+        <div class="fsign-progress" id="fsign-progress" style="display:none;">
+            <div class="fsign-progress-bar" id="fsign-progress-bar">0%</div>
+        </div>
+        <div class="fsign-status" id="fsign-status">Готов к работе</div>
+    `;
+    document.body.appendChild(ui);
+
+    let collectedData = [];
+
+    // Получение последней страницы
+    function getLastPage() {
+        const lastLink = document.querySelector('.pagi a[href*="Посл"]');
+        if (lastLink) {
+            const match = lastLink.getAttribute('href').match(/page=(\d+)/);
+            return match ? parseInt(match[1]) : 1;
+        }
+        return 1;
+    }
+
+    // Парсинг данных со страницы
+    function parsePageData() {
+        const rows = document.querySelectorAll('.table.table-striped tbody tr');
+        const data = [];
+
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 5) {
+                const docInfo = cells[0].textContent.trim().split('\n').filter(s => s.trim());
+                const stageInfo = cells[1].textContent.trim().split('\n').filter(s => s.trim());
+                const initiator = cells[2].textContent.trim();
+                const addressee = cells[3].textContent.trim().split('\n').filter(s => s.trim());
+                const dates = cells[4].textContent.trim().split('\n').filter(s => s.trim());
+
+                data.push({
+                    'Номер документа': docInfo[0] || '',
+                    'Название': docInfo[1] || '',
+                    'Стадия': stageInfo[0] || '',
+                    'Статус': stageInfo[1] || '',
+                    'Тип документа': stageInfo[2] || '',
+                    'Инициатор': initiator,
+                    'Адресат': addressee[0] || '',
+                    'Подразделение': addressee[1] || '',
+                    'Дата документа': dates[0] || '',
+                    'Дата модификации': dates[1] || ''
+                });
+            }
+        });
+
+        return data;
+    }
+
+    // Обновление прогресса
+    function updateProgress(current, total) {
+        const percent = Math.round((current / total) * 100);
+        const progressBar = document.getElementById('fsign-progress-bar');
+        progressBar.style.width = percent + '%';
+        progressBar.textContent = percent + '%';
+    }
+
+    // Сбор данных со всех страниц
+    async function collectAllData() {
+        const collectBtn = document.getElementById('fsign-collect');
+        const xlsxBtn = document.getElementById('fsign-xlsx');
+        const jsonBtn = document.getElementById('fsign-json');
+        const status = document.getElementById('fsign-status');
+        const progress = document.getElementById('fsign-progress');
+
+        collectBtn.disabled = true;
+        xlsxBtn.disabled = true;
+        jsonBtn.disabled = true;
+        progress.style.display = 'block';
+        collectedData = [];
+
+        const lastPage = getLastPage();
+        status.textContent = `Найдено страниц: ${lastPage}`;
+
+        // Собираем данные с каждой страницы от 1 до последней
+        for (let page = 1; page <= lastPage; page++) {
+            try {
+                status.textContent = `Загрузка ${page}/${lastPage}...`;
+
+                let html;
+                if (page === 1) {
+                    // Для первой страницы используем текущий DOM
+                    html = document.documentElement.outerHTML;
+                } else {
+                    // Для остальных страниц делаем запрос
+                    const response = await fetch(`https://sign.fsdocs.kz/contracts?page=${page}`);
+                    html = await response.text();
+                }
+
+                // Парсим HTML
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                const rows = tempDiv.querySelectorAll('.table.table-striped tbody tr');
+
+                // Извлекаем данные из каждой строки
+                rows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    if (cells.length >= 5) {
+                        const docInfo = cells[0].textContent.trim().split('\n').filter(s => s.trim());
+                        const stageInfo = cells[1].textContent.trim().split('\n').filter(s => s.trim());
+                        const initiator = cells[2].textContent.trim();
+                        const addressee = cells[3].textContent.trim().split('\n').filter(s => s.trim());
+                        const dates = cells[4].textContent.trim().split('\n').filter(s => s.trim());
+
+                        collectedData.push({
+                            'Номер документа': docInfo[0] || '',
+                            'Название': docInfo[1] || '',
+                            'Стадия': stageInfo[0] || '',
+                            'Статус': stageInfo[1] || '',
+                            'Тип документа': stageInfo[2] || '',
+                            'Инициатор': initiator,
+                            'Адресат': addressee[0] || '',
+                            'Подразделение': addressee[1] || '',
+                            'Дата документа': dates[0] || '',
+                            'Дата модификации': dates[1] || ''
+                        });
+                    }
+                });
+
+                updateProgress(page, lastPage);
+
+                // Задержка между запросами
+                if (page < lastPage) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+
+            } catch (error) {
+                console.error(`Ошибка на странице ${page}:`, error);
+                status.textContent = `Ошибка на странице ${page}`;
+            }
+        }
+
+        status.textContent = `Собрано: ${collectedData.length} записей`;
+        xlsxBtn.disabled = false;
+        jsonBtn.disabled = false;
+        collectBtn.disabled = false;
+    }
+
+    // Скачивание XLSX
+    function downloadXLSX() {
+        if (collectedData.length === 0) {
+            alert('Нет данных для выгрузки!');
+            return;
+        }
+
+        const ws = XLSX.utils.json_to_sheet(collectedData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Contracts');
+
+        const date = new Date().toISOString().split('T')[0];
+        XLSX.writeFile(wb, `FSign_Contracts_${date}.xlsx`);
+    }
+
+    // Скачивание JSON
+    function downloadJSON() {
+        if (collectedData.length === 0) {
+            alert('Нет данных для выгрузки!');
+            return;
+        }
+
+        const dataStr = JSON.stringify(collectedData, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        const date = new Date().toISOString().split('T')[0];
+        link.download = `FSign_Contracts_${date}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // События
+    document.getElementById('fsign-collect').addEventListener('click', collectAllData);
+    document.getElementById('fsign-xlsx').addEventListener('click', downloadXLSX);
+    document.getElementById('fsign-json').addEventListener('click', downloadJSON);
+
+})();
