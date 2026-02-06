@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name FS-EDI Stat Company CSV/XLSX Export Table (NOT WORK)
+// @name FS-EDI Company выгрузка CSV/XLSX Export Table
 // @namespace http://tampermonkey.net/
 // @version 3.0
 // @description Полный сканер stat компаний: все страницы, логирование, retry, export CSV/XLSX. Сохраняет прогресс в localStorage.
