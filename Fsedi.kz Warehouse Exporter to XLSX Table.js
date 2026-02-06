@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Fsedi.kz Warehouse Exporter to XLSX Table
+// @name         FS-EDI Warehouse Exporter to XLSX Table
 // @namespace    http://violentmonkey.github.io/
 // @version      1.0
 // @description  Извлечение данных таблицы со страницы fsedi.kz/companies/edit/* в XLSX
